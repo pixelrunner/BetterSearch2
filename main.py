@@ -2,71 +2,55 @@
 
 import asyncio
 import json
-from typing import Any
 import settings
-
-# import beeline
+from typing import Any
 from aiohttp import ClientSession, ClientTimeout
-from beeline.patch.urllib import *  # pylint: disable=wildcard-import
-
-# TODO Add Telegram module
+import telegram_send
 
 
 def main(event: Any = None, context: Any = None) -> None:
     asyncio.run(main_async())
 
-def build_params_list() -> list:
-    params_list = []
-    for centre_id in settings.leisure_centres:
-        params = {
-            "centre": centre_id,
-            "courseGroupCategory": 1,  # Swimming
-            "courseType": 1,  # Continous Programme
-            "showFullCourses": True,  # Show classes that are full
-            "dayOfWeek": settings.search_days,
-            "level262": settings.course_level,  # 262 is the Swimbies category (was 'level196')
-        }
-        params_list.append(params)
-    return params_list
-
 
 async def main_async() -> None:
-    beeline.init(dataset="swimscan")
+    session = ClientSession(timeout=ClientTimeout(total=10))
 
-    with beeline.tracer("main_async"):
-        responses = await asyncio.gather(fetch_all())
+    fetches = [fetch(session, i) for i in settings.leisure_centres]
+    responses = await asyncio.gather(*fetches, return_exceptions=True)
+    await session.close()
 
-        available_courses = find_available_courses(responses)
+    available_courses = find_available_courses(responses)
+    if available_courses:
+        # print_courses(available_courses)
+        send_telegram(available_courses)
+    else:
+        print('No courses available at this time') #debug
 
-        if available_courses:
-            send_telegram(available_courses)
-
-        async with ClientSession().get(settings.healthcheck_url) as response:
-            await response.text()
-
-
-@beeline.traced("fetch_all")  # type: ignore
-async def fetch_all():
-    params_list = build_params_list()
-    async with ClientSession(timeout=ClientTimeout(total=10)) as session:  # ***
-        results = await asyncio.gather(*[fetch(session, params) for params in params_list], return_exceptions=True)
-    return results
+    session_hc = ClientSession(timeout=ClientTimeout(total=10))
+    async with session_hc.get(settings.healthcheck_url) as response:
+        await response.text()
+    await session_hc.close()
 
 
-@beeline.traced("fetch")  # type: ignore
-async def fetch(session, params):
+async def fetch(session: ClientSession, centre_id: int) -> Any:
+    filters = {
+        "centre": centre_id,
+        "courseGroupCategory": 1,  # Swimming
+        "courseType": 1,  # Continous Programme
+        "showFullCourses": True,  # Show classes that a full
+        "dayOfWeek": settings.search_days,  # Saturday, Sunday
+        "level196": settings.course_level,  # 196 is the Swimbies category, 842 is Dippers level, 844 is Splashers level
+    }
     async with session.get(
-            settings.search_url,
-            params={"filter": json.dumps(params)}
+        settings.search_url, params={"filter": json.dumps(filters)}
     ) as response:
         return await response.json()
 
 
-@beeline.traced("find_available_courses")  # type: ignore
 def find_available_courses(all_courses: tuple[Any, ...]) -> list[dict[str, Any]]:
     courses = []
 
-    for centre in all_courses[0]:
+    for centre in all_courses:
         if isinstance(centre, TimeoutError):
             continue
 
@@ -74,15 +58,26 @@ def find_available_courses(all_courses: tuple[Any, ...]) -> list[dict[str, Any]]
             if str(course.get("courseId", "")) in settings.skipped_courses:
                 continue
 
-            if course.get("availability", {}).get("spaces", {}).get("free", 0) > 0:
+            if settings.debugging:
+                courses.append(course) # Show all courses, for testing purposes
+            elif course.get("availability", {}).get("spaces", {}).get("free", 0) > 0:
                 courses.append(course)
-
     return courses
 
+'''
+def print_courses(courses: list[dict[str, Any]]) -> None:
+    print("Courses available:")
 
-@beeline.traced("send_telegram")  # type: ignore # TODO finish telegram function
+    for course in courses:
+        print()
+        print(f"  - {course['centre']['name']}")
+        print(f"    {course['schedule']['dayOfWeek']}s {course['schedule']['time']['start']} - {course['schedule']['time']['end']}")
+        print(f"    {course['availability']['spaces']['free']} spaces available")
+        print(f"    Course ID: {course['courseId']}")
+'''
+
 def send_telegram(courses: list[dict[str, Any]]) -> None:
-    message = "** Swimming Courses available!**\n\n"
+    message = "** Swimming Courses available! **\n\n"
 
     for course in courses:
         message += f"{course['centre']['name']}\n"
@@ -90,8 +85,9 @@ def send_telegram(courses: list[dict[str, Any]]) -> None:
         message += f"{course['availability']['spaces']['free']} spaces available\n"
         message += f"Course ID: {course['courseId']}\n\n"
 
-    # TODO send telegram bot message
-    print(message) #T
+    telegram_send.send(messages=[message])
+    print(message)
+
 
 if __name__ == "__main__":
     main()
