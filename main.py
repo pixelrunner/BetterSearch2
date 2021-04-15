@@ -8,8 +8,6 @@ import settings
 # import beeline
 from aiohttp import ClientSession, ClientTimeout
 from beeline.patch.urllib import *  # pylint: disable=wildcard-import
-# from sendgrid import SendGridAPIClient
-# from sendgrid.helpers.mail import Mail
 
 # TODO Add Telegram module
 
@@ -41,7 +39,6 @@ async def main_async() -> None:
         available_courses = find_available_courses(responses)
 
         if available_courses:
-            # send_mail(available_courses)
             send_telegram(available_courses)
 
         async with ClientSession().get(settings.healthcheck_url) as response:
@@ -53,7 +50,6 @@ async def fetch_all():
     params_list = build_params_list()
     async with ClientSession(timeout=ClientTimeout(total=10)) as session:  # ***
         results = await asyncio.gather(*[fetch(session, params) for params in params_list], return_exceptions=True)
-        # await session.close()
     return results
 
 
@@ -82,28 +78,6 @@ def find_available_courses(all_courses: tuple[Any, ...]) -> list[dict[str, Any]]
                 courses.append(course)
 
     return courses
-
-
-''' # remove email section
-@beeline.traced("send_mail")  # type: ignore
-def send_mail(courses: list[dict[str, Any]]) -> None:
-    message = "<strong>Courses available:</strong><br><br>"
-
-    for course in courses:
-        message += f"{course['centre']['name']}<br>"
-        message += f"{course['schedule']['dayOfWeek']}s {course['schedule']['time']['start']} - {course['schedule']['time']['end']}<br>"
-        message += f"{course['availability']['spaces']['free']} spaces available<br>"
-        message += f"Course ID: {course['courseId']}<br><br>"
-
-    mail = Mail(
-        from_email=("swimscan@auto.tenzer.dk", "Swimscan"),
-        to_emails="us@fihl-pearson.uk",
-        subject="Swimming courses available",
-        html_content=message,
-    )
-    sendgrid = SendGridAPIClient(os.environ.get("SENDGRID_TOKEN"))
-    sendgrid.send(mail)
-'''
 
 
 @beeline.traced("send_telegram")  # type: ignore # TODO finish telegram function
