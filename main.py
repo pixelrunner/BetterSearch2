@@ -6,10 +6,14 @@ import settings
 from typing import Any
 from aiohttp import ClientSession, ClientTimeout
 import telegram_send
+import time
+from datetime import datetime
 
 
 def main(event: Any = None, context: Any = None) -> None:
-    asyncio.run(main_async())
+    while True:
+        asyncio.run(main_async())
+        time.sleep(1800)
 
 
 async def main_async() -> None:
@@ -24,7 +28,7 @@ async def main_async() -> None:
         # print_courses(available_courses)
         send_telegram(available_courses)
     else:
-        print('No courses available at this time') #debug
+        print(str(datetime.now().strftime("%d/%m/%Y %H:%M:%S")) + ' - No courses available') #debug
 
     session_hc = ClientSession(timeout=ClientTimeout(total=10))
     async with session_hc.get(settings.healthcheck_url) as response:
