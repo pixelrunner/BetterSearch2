@@ -4,6 +4,7 @@ import asyncio
 import json
 import settings
 from typing import Any
+import aiohttp
 from aiohttp import ClientSession, ClientTimeout
 import telegram_send
 import time
@@ -23,24 +24,27 @@ async def main_async() -> None:
     responses = await asyncio.gather(*fetches, return_exceptions=True)
     await session.close()
 
-    available_courses = find_available_courses(responses)
+    available_courses, keep_alive = find_available_courses(responses)
     if available_courses:
         # print_courses(available_courses)
         send_telegram(available_courses)
     else:
         print(str(datetime.now().strftime("%d/%m/%Y %H:%M:%S")) + ' - No courses available') #debug
 
-    session_hc = ClientSession(timeout=ClientTimeout(total=10))
-    async with session_hc.get(settings.healthcheck_url) as response:
-        await response.text()
-    await session_hc.close()
+    # send healthcheck ping if keepalive is set to true (no errors in retrieving data)
+    if keep_alive == True:
+        session_hc = ClientSession(timeout=ClientTimeout(total=10))
+        async with session_hc.get(settings.healthcheck_url) as response:
+            await response.text()
+        await session_hc.close()
+
 
 
 async def fetch(session: ClientSession, centre_id: int) -> Any:
     filters = {
         "centre": centre_id,
         "courseGroupCategory": 1,  # Swimming
-        "courseType": 1,  # Continous Programme
+        "courseType": 1,  # Continuous Programme
         "showFullCourses": True,  # Show classes that a full
         "dayOfWeek": settings.search_days,  # Saturday, Sunday
         "level196": settings.course_level,  # 196 is the Swimbies category, 842 is Dippers level, 844 is Splashers level
@@ -53,20 +57,34 @@ async def fetch(session: ClientSession, centre_id: int) -> Any:
 
 def find_available_courses(all_courses: tuple[Any, ...]) -> list[dict[str, Any]]:
     courses = []
+    keep_alive = True
 
     for centre in all_courses:
-        if isinstance(centre, TimeoutError):
+        if isinstance(centre, asyncio.exceptions.TimeoutError):
+            keep_alive = False
+            continue
+        elif isinstance(centre, aiohttp.client_exceptions.ClientConnectorError):
+            keep_alive = False
             continue
 
         for course in centre.get("resultSet", {}).get("results", []):
             if str(course.get("courseId", "")) in settings.skipped_courses:
                 continue
 
+            for extra_check_course in settings.extra_search:
+                # extra search created:
+                # if any courses come up from the predefined list, then check them against the defined spaces and
+                # add them to the list to send if the number of spaces differ
+                # the example is a course that was shown as -1 and as soon as it goes to 0 then alert
+                if str(course.get("courseId", "")) == extra_check_course.get('courseId', '') and \
+                        course.get("availability", {}).get("spaces", {}).get("free", 0) != extra_check_course.get('course_spaces', ''):
+                    courses.append(course)
+                    continue
             if settings.debugging:
                 courses.append(course) # Show all courses, for testing purposes
             elif course.get("availability", {}).get("spaces", {}).get("free", 0) > 0:
                 courses.append(course)
-    return courses
+    return courses, keep_alive
 
 '''
 def print_courses(courses: list[dict[str, Any]]) -> None:
